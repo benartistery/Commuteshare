@@ -1,56 +1,9 @@
-# Dependencies
 node_modules/
-frontend/node_modules/
-
-# Expo
-frontend/.expo/
-frontend/.metro-cache/
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
-
-# Python
+.expo/
+.metro-cache/
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-.venv/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Build
-dist/
-build/
-*.egg-info/
-
-# Local env files (keep templates)
-# .env
-
-# Zip files
+*.pyc
+.emergent/
 *.zip
-
-# Testing
 test_result.md
 model.patch
-
-# Emergent
-.emergent/
