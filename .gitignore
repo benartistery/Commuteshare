@@ -7,3 +7,7 @@ __pycache__/
 *.zip
 test_result.md
 model.patch
+-e 
+# Environment files
+*.env
+*.env.*
