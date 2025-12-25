@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   RefreshControl,
   Alert,
-  TextInput,
   Modal,
   KeyboardAvoidingView,
   Platform,
@@ -25,36 +24,78 @@ import api from '../../src/api/client';
 interface Transaction {
   id: string;
   amount: number;
+  currency: string;
   transaction_type: string;
   description: string;
   status: string;
   reference?: string;
+  discount_applied?: number;
   created_at: string;
+}
+
+interface WalletBalance {
+  fiat_balance: number;
+  sol_balance: number;
+  usdt_balance: number;
+  cost_balance: number;
+  total_in_fiat: number;
+  loyalty_points: number;
+  currency: { code: string; symbol: string; name: string };
+  solana_wallet?: string;
+  exchange_rates: Record<string, number>;
+}
+
+interface DiscountInfo {
+  days_since_joining: number;
+  is_first_year: boolean;
+  discounts: {
+    fiat: number;
+    sol: number;
+    usdt: number;
+    cost: number;
+  };
+  message: string;
 }
 
 export default function WalletScreen() {
   const router = useRouter();
   const { user, refreshUser, logout } = useAuthStore();
+  const [walletData, setWalletData] = useState<WalletBalance | null>(null);
+  const [discountInfo, setDiscountInfo] = useState<DiscountInfo | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [depositModalVisible, setDepositModalVisible] = useState(false);
   const [withdrawModalVisible, setWithdrawModalVisible] = useState(false);
+  const [swapModalVisible, setSwapModalVisible] = useState(false);
+  const [selectedCurrency, setSelectedCurrency] = useState('FIAT');
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawData, setWithdrawData] = useState({
     amount: '',
     bank_name: '',
     account_number: '',
     account_name: '',
+    solana_address: '',
+  });
+  const [swapData, setSwapData] = useState({
+    from_currency: 'FIAT',
+    to_currency: 'COST',
+    amount: '',
   });
   const [processing, setProcessing] = useState(false);
 
-  const loadTransactions = async () => {
+  const loadWalletData = async () => {
     try {
-      const response = await api.get('/wallet/transactions');
-      setTransactions(response.data);
+      const [balanceRes, discountRes, transactionsRes] = await Promise.all([
+        api.get('/wallet/balance'),
+        api.get('/wallet/discount-info'),
+        api.get('/wallet/transactions'),
+      ]);
+      setWalletData(balanceRes.data);
+      setDiscountInfo(discountRes.data);
+      setTransactions(transactionsRes.data);
     } catch (error) {
-      console.log('Error loading transactions:', error);
+      console.log('Error loading wallet data:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -63,11 +104,11 @@ export default function WalletScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refreshUser(), loadTransactions()]);
+    await Promise.all([refreshUser(), loadWalletData()]);
   }, []);
 
   useEffect(() => {
-    loadTransactions();
+    loadWalletData();
   }, []);
 
   const handleDeposit = async () => {
@@ -79,12 +120,12 @@ export default function WalletScreen() {
 
     setProcessing(true);
     try {
-      await api.post('/wallet/deposit', { amount });
+      await api.post('/wallet/deposit', { amount, currency: selectedCurrency });
       await refreshUser();
-      await loadTransactions();
+      await loadWalletData();
       setDepositModalVisible(false);
       setDepositAmount('');
-      Alert.alert('Success', `₦${amount.toLocaleString()} deposited successfully (Mock)`);
+      Alert.alert('Success', `Deposited successfully (Mock)`);
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.detail || 'Deposit failed');
     } finally {
@@ -98,28 +139,58 @@ export default function WalletScreen() {
       Alert.alert('Error', 'Please enter a valid amount');
       return;
     }
-    if (!withdrawData.bank_name || !withdrawData.account_number || !withdrawData.account_name) {
-      Alert.alert('Error', 'Please fill all bank details');
-      return;
-    }
 
     setProcessing(true);
     try {
       await api.post('/wallet/withdraw', {
         amount,
+        currency: selectedCurrency,
         bank_name: withdrawData.bank_name,
         account_number: withdrawData.account_number,
         account_name: withdrawData.account_name,
+        solana_address: withdrawData.solana_address,
       });
       await refreshUser();
-      await loadTransactions();
+      await loadWalletData();
       setWithdrawModalVisible(false);
-      setWithdrawData({ amount: '', bank_name: '', account_number: '', account_name: '' });
+      setWithdrawData({ amount: '', bank_name: '', account_number: '', account_name: '', solana_address: '' });
       Alert.alert('Success', 'Withdrawal request submitted (Mock)');
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.detail || 'Withdrawal failed');
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const handleSwap = async () => {
+    const amount = parseFloat(swapData.amount);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('Error', 'Please enter a valid amount');
+      return;
+    }
+
+    setProcessing(true);
+    try {
+      const result = await api.post('/wallet/swap', swapData);
+      await refreshUser();
+      await loadWalletData();
+      setSwapModalVisible(false);
+      setSwapData({ from_currency: 'FIAT', to_currency: 'COST', amount: '' });
+      Alert.alert('Success', `Swapped ${result.data.amount_sent} ${result.data.from_currency} to ${result.data.amount_received.toFixed(4)} ${result.data.to_currency}`);
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.detail || 'Swap failed');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const createSolanaWallet = async () => {
+    try {
+      const result = await api.post('/wallet/solana/create');
+      await loadWalletData();
+      Alert.alert('Success', `Solana wallet created!\n${result.data.wallet_address}`);
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.detail || 'Failed to create wallet');
     }
   };
 
@@ -148,20 +219,23 @@ export default function WalletScreen() {
       case 'purchase': return 'cart';
       case 'sale': return 'cash';
       case 'refund': return 'refresh-circle';
+      case 'swap': return 'swap-horizontal';
       default: return 'swap-horizontal';
     }
   };
 
   const getTransactionColor = (type: string) => {
     switch (type) {
-      case 'deposit': 
-      case 'sale': 
-      case 'refund': 
+      case 'deposit':
+      case 'sale':
+      case 'refund':
         return COLORS.success;
-      case 'withdrawal': 
-      case 'purchase': 
+      case 'withdrawal':
+      case 'purchase':
         return COLORS.error;
-      default: 
+      case 'swap':
+        return COLORS.accent;
+      default:
         return COLORS.textSecondary;
     }
   };
@@ -171,11 +245,17 @@ export default function WalletScreen() {
     return date.toLocaleDateString('en-NG', {
       day: 'numeric',
       month: 'short',
-      year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
     });
   };
+
+  const currencyOptions = [
+    { id: 'FIAT', label: walletData?.currency?.code || 'NGN', icon: 'cash' },
+    { id: 'SOL', label: 'SOL', icon: 'logo-bitcoin' },
+    { id: 'USDT', label: 'USDT', icon: 'logo-usd' },
+    { id: 'COST', label: 'COST', icon: 'diamond' },
+  ];
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -197,33 +277,137 @@ export default function WalletScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Balance Card */}
-        <Card style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Available Balance</Text>
-          <Text style={styles.balanceAmount}>
-            ₦{(user?.wallet_balance || 0).toLocaleString('en-NG', { minimumFractionDigits: 2 })}
-          </Text>
-          <View style={styles.pointsRow}>
-            <Ionicons name="star" size={16} color={COLORS.accent} />
-            <Text style={styles.pointsText}>{user?.loyalty_points || 0} Loyalty Points</Text>
+        {/* Discount Banner */}
+        {discountInfo && (
+          <View style={styles.discountBanner}>
+            <Ionicons name="pricetag" size={18} color={COLORS.accent} />
+            <Text style={styles.discountText}>{discountInfo.message}</Text>
           </View>
-          <View style={styles.balanceActions}>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.depositButton]}
-              onPress={() => setDepositModalVisible(true)}
-            >
-              <Ionicons name="add" size={20} color={COLORS.white} />
-              <Text style={styles.actionButtonText}>Add Money</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.withdrawButton]}
-              onPress={() => setWithdrawModalVisible(true)}
-            >
-              <Ionicons name="arrow-up" size={20} color={COLORS.white} />
-              <Text style={styles.actionButtonText}>Withdraw</Text>
-            </TouchableOpacity>
+        )}
+
+        {/* Total Balance Card */}
+        <Card style={styles.totalBalanceCard}>
+          <Text style={styles.totalBalanceLabel}>Total Balance</Text>
+          <Text style={styles.totalBalanceAmount}>
+            {walletData?.currency?.symbol || '₦'}
+            {(walletData?.total_in_fiat || 0).toLocaleString('en-NG', { minimumFractionDigits: 2 })}
+          </Text>
+          <View style={styles.loyaltyRow}>
+            <Ionicons name="star" size={16} color={COLORS.accent} />
+            <Text style={styles.loyaltyText}>{walletData?.loyalty_points || 0} Loyalty Points</Text>
           </View>
         </Card>
+
+        {/* Currency Balances */}
+        <View style={styles.balancesGrid}>
+          <Card style={styles.balanceCard}>
+            <View style={[styles.balanceIcon, { backgroundColor: COLORS.primary + '20' }]}>
+              <Ionicons name="cash" size={20} color={COLORS.primary} />
+            </View>
+            <Text style={styles.balanceCurrency}>{walletData?.currency?.code || 'NGN'}</Text>
+            <Text style={styles.balanceAmount}>
+              {walletData?.currency?.symbol}{(walletData?.fiat_balance || 0).toLocaleString()}
+            </Text>
+          </Card>
+
+          <Card style={styles.balanceCard}>
+            <View style={[styles.balanceIcon, { backgroundColor: '#9945FF20' }]}>
+              <Ionicons name="logo-bitcoin" size={20} color="#9945FF" />
+            </View>
+            <Text style={styles.balanceCurrency}>SOL</Text>
+            <Text style={styles.balanceAmount}>
+              {(walletData?.sol_balance || 0).toFixed(4)}
+            </Text>
+          </Card>
+
+          <Card style={styles.balanceCard}>
+            <View style={[styles.balanceIcon, { backgroundColor: '#26A17B20' }]}>
+              <Ionicons name="logo-usd" size={20} color="#26A17B" />
+            </View>
+            <Text style={styles.balanceCurrency}>USDT</Text>
+            <Text style={styles.balanceAmount}>
+              {(walletData?.usdt_balance || 0).toFixed(2)}
+            </Text>
+          </Card>
+
+          <Card style={[styles.balanceCard, styles.costCard]}>
+            <View style={[styles.balanceIcon, { backgroundColor: COLORS.accent + '20' }]}>
+              <Ionicons name="diamond" size={20} color={COLORS.accent} />
+            </View>
+            <Text style={styles.balanceCurrency}>COST</Text>
+            <Text style={[styles.balanceAmount, { color: COLORS.accent }]}>
+              {(walletData?.cost_balance || 0).toFixed(2)}
+            </Text>
+            {discountInfo && (
+              <View style={styles.discountBadge}>
+                <Text style={styles.discountBadgeText}>{discountInfo.discounts.cost}% off</Text>
+              </View>
+            )}
+          </Card>
+        </View>
+
+        {/* Action Buttons */}
+        <View style={styles.actionButtons}>
+          <TouchableOpacity
+            style={[styles.actionBtn, { backgroundColor: COLORS.success }]}
+            onPress={() => setDepositModalVisible(true)}
+          >
+            <Ionicons name="add" size={20} color={COLORS.white} />
+            <Text style={styles.actionBtnText}>Add</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
+            onPress={() => setWithdrawModalVisible(true)}
+          >
+            <Ionicons name="arrow-up" size={20} color={COLORS.white} />
+            <Text style={styles.actionBtnText}>Withdraw</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionBtn, { backgroundColor: COLORS.accent }]}
+            onPress={() => setSwapModalVisible(true)}
+          >
+            <Ionicons name="swap-horizontal" size={20} color={COLORS.white} />
+            <Text style={styles.actionBtnText}>Swap</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionBtn, { backgroundColor: '#9945FF' }]}
+            onPress={() => router.push('/token-info')}
+          >
+            <Ionicons name="diamond" size={20} color={COLORS.white} />
+            <Text style={styles.actionBtnText}>COST</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Solana Wallet */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Solana Wallet</Text>
+          {walletData?.solana_wallet ? (
+            <Card style={styles.solanaCard}>
+              <View style={styles.solanaHeader}>
+                <Ionicons name="wallet" size={24} color="#9945FF" />
+                <Text style={styles.solanaLabel}>Connected</Text>
+              </View>
+              <Text style={styles.solanaAddress} numberOfLines={1}>
+                {walletData.solana_wallet}
+              </Text>
+              <Text style={styles.networkBadge}>Network: Devnet</Text>
+            </Card>
+          ) : (
+            <Card style={styles.solanaCard}>
+              <Text style={styles.noWalletText}>No Solana wallet connected</Text>
+              <Button
+                title="Create Wallet"
+                onPress={createSolanaWallet}
+                variant="outline"
+                size="small"
+                style={{ marginTop: SPACING.sm }}
+              />
+            </Card>
+          )}
+        </View>
 
         {/* Quick Actions */}
         <View style={styles.quickActions}>
@@ -231,13 +415,13 @@ export default function WalletScreen() {
             <View style={[styles.quickActionIcon, { backgroundColor: COLORS.primary + '20' }]}>
               <Ionicons name="bag-handle" size={24} color={COLORS.primary} />
             </View>
-            <Text style={styles.quickActionText}>My Orders</Text>
+            <Text style={styles.quickActionText}>Orders</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.quickAction} onPress={() => router.push('/my-sales')}>
             <View style={[styles.quickActionIcon, { backgroundColor: COLORS.secondary + '20' }]}>
               <Ionicons name="trending-up" size={24} color={COLORS.secondary} />
             </View>
-            <Text style={styles.quickActionText}>My Sales</Text>
+            <Text style={styles.quickActionText}>Sales</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.quickAction} onPress={() => router.push('/profile')}>
             <View style={[styles.quickActionIcon, { backgroundColor: COLORS.accent + '20' }]}>
@@ -274,20 +458,17 @@ export default function WalletScreen() {
                   </Text>
                 </View>
                 <View style={styles.transactionAmount}>
-                  <Text
-                    style={[
-                      styles.amountText,
-                      { color: getTransactionColor(transaction.transaction_type) },
-                    ]}
-                  >
+                  <Text style={[styles.amountText, { color: getTransactionColor(transaction.transaction_type) }]}>
                     {transaction.transaction_type === 'deposit' ||
                     transaction.transaction_type === 'sale' ||
                     transaction.transaction_type === 'refund'
                       ? '+'
                       : '-'}
-                    ₦{transaction.amount.toLocaleString()}
+                    {transaction.amount.toLocaleString()} {transaction.currency}
                   </Text>
-                  <Text style={styles.statusText}>{transaction.status}</Text>
+                  {transaction.discount_applied > 0 && (
+                    <Text style={styles.discountApplied}>-{transaction.discount_applied.toFixed(2)} saved</Text>
+                  )}
                 </View>
               </Card>
             ))
@@ -310,22 +491,53 @@ export default function WalletScreen() {
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Money</Text>
+              <Text style={styles.modalTitle}>Add Funds</Text>
               <TouchableOpacity onPress={() => setDepositModalVisible(false)}>
                 <Ionicons name="close" size={24} color={COLORS.text} />
               </TouchableOpacity>
             </View>
-            <Text style={styles.modalNote}>
-              This is a mock deposit. In production, you'll be redirected to Paystack.
-            </Text>
+
+            <Text style={styles.modalSubtitle}>Select Currency</Text>
+            <View style={styles.currencySelector}>
+              {currencyOptions.map((opt) => (
+                <TouchableOpacity
+                  key={opt.id}
+                  style={[
+                    styles.currencyOption,
+                    selectedCurrency === opt.id && styles.currencyOptionActive,
+                  ]}
+                  onPress={() => setSelectedCurrency(opt.id)}
+                >
+                  <Ionicons
+                    name={opt.icon as any}
+                    size={18}
+                    color={selectedCurrency === opt.id ? COLORS.white : COLORS.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.currencyOptionText,
+                      selectedCurrency === opt.id && styles.currencyOptionTextActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             <Input
-              label="Amount (₦)"
+              label="Amount"
               placeholder="Enter amount"
               value={depositAmount}
               onChangeText={setDepositAmount}
               keyboardType="numeric"
               icon="cash"
             />
+
+            <Text style={styles.mockNote}>
+              This is a mock deposit. In production, you'll be redirected to payment gateway.
+            </Text>
+
             <Button
               title="Deposit"
               onPress={handleDeposit}
@@ -355,39 +567,79 @@ export default function WalletScreen() {
                   <Ionicons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.modalNote}>
-                Account name must match your registered name for security.
-              </Text>
+
+              <Text style={styles.modalSubtitle}>Select Currency</Text>
+              <View style={styles.currencySelector}>
+                {currencyOptions.map((opt) => (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={[
+                      styles.currencyOption,
+                      selectedCurrency === opt.id && styles.currencyOptionActive,
+                    ]}
+                    onPress={() => setSelectedCurrency(opt.id)}
+                  >
+                    <Ionicons
+                      name={opt.icon as any}
+                      size={18}
+                      color={selectedCurrency === opt.id ? COLORS.white : COLORS.textSecondary}
+                    />
+                    <Text
+                      style={[
+                        styles.currencyOptionText,
+                        selectedCurrency === opt.id && styles.currencyOptionTextActive,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
               <Input
-                label="Amount (₦)"
+                label="Amount"
                 placeholder="Enter amount"
                 value={withdrawData.amount}
-                onChangeText={(v) => setWithdrawData(prev => ({ ...prev, amount: v }))}
+                onChangeText={(v) => setWithdrawData((prev) => ({ ...prev, amount: v }))}
                 keyboardType="numeric"
                 icon="cash"
               />
-              <Input
-                label="Bank Name"
-                placeholder="e.g., GTBank"
-                value={withdrawData.bank_name}
-                onChangeText={(v) => setWithdrawData(prev => ({ ...prev, bank_name: v }))}
-                icon="business"
-              />
-              <Input
-                label="Account Number"
-                placeholder="10 digit account number"
-                value={withdrawData.account_number}
-                onChangeText={(v) => setWithdrawData(prev => ({ ...prev, account_number: v }))}
-                keyboardType="numeric"
-                icon="card"
-              />
-              <Input
-                label="Account Name"
-                placeholder="Name on bank account"
-                value={withdrawData.account_name}
-                onChangeText={(v) => setWithdrawData(prev => ({ ...prev, account_name: v }))}
-                icon="person"
-              />
+
+              {selectedCurrency === 'FIAT' ? (
+                <>
+                  <Input
+                    label="Bank Name"
+                    placeholder="e.g., GTBank"
+                    value={withdrawData.bank_name}
+                    onChangeText={(v) => setWithdrawData((prev) => ({ ...prev, bank_name: v }))}
+                    icon="business"
+                  />
+                  <Input
+                    label="Account Number"
+                    placeholder="10 digit account number"
+                    value={withdrawData.account_number}
+                    onChangeText={(v) => setWithdrawData((prev) => ({ ...prev, account_number: v }))}
+                    keyboardType="numeric"
+                    icon="card"
+                  />
+                  <Input
+                    label="Account Name"
+                    placeholder="Name on bank account"
+                    value={withdrawData.account_name}
+                    onChangeText={(v) => setWithdrawData((prev) => ({ ...prev, account_name: v }))}
+                    icon="person"
+                  />
+                </>
+              ) : (
+                <Input
+                  label="Solana Wallet Address"
+                  placeholder="Enter Solana address"
+                  value={withdrawData.solana_address}
+                  onChangeText={(v) => setWithdrawData((prev) => ({ ...prev, solana_address: v }))}
+                  icon="wallet"
+                />
+              )}
+
               <Button
                 title="Withdraw"
                 onPress={handleWithdraw}
@@ -397,6 +649,97 @@ export default function WalletScreen() {
               />
             </View>
           </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Swap Modal */}
+      <Modal
+        visible={swapModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSwapModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Swap Currency</Text>
+              <TouchableOpacity onPress={() => setSwapModalVisible(false)}>
+                <Ionicons name="close" size={24} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSubtitle}>From</Text>
+            <View style={styles.currencySelector}>
+              {currencyOptions.map((opt) => (
+                <TouchableOpacity
+                  key={opt.id}
+                  style={[
+                    styles.currencyOption,
+                    swapData.from_currency === opt.id && styles.currencyOptionActive,
+                  ]}
+                  onPress={() => setSwapData((prev) => ({ ...prev, from_currency: opt.id }))}
+                >
+                  <Text
+                    style={[
+                      styles.currencyOptionText,
+                      swapData.from_currency === opt.id && styles.currencyOptionTextActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.swapArrow}>
+              <Ionicons name="arrow-down" size={24} color={COLORS.accent} />
+            </View>
+
+            <Text style={styles.modalSubtitle}>To</Text>
+            <View style={styles.currencySelector}>
+              {currencyOptions.map((opt) => (
+                <TouchableOpacity
+                  key={opt.id}
+                  style={[
+                    styles.currencyOption,
+                    swapData.to_currency === opt.id && styles.currencyOptionActive,
+                  ]}
+                  onPress={() => setSwapData((prev) => ({ ...prev, to_currency: opt.id }))}
+                >
+                  <Text
+                    style={[
+                      styles.currencyOptionText,
+                      swapData.to_currency === opt.id && styles.currencyOptionTextActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Input
+              label="Amount"
+              placeholder="Enter amount to swap"
+              value={swapData.amount}
+              onChangeText={(v) => setSwapData((prev) => ({ ...prev, amount: v }))}
+              keyboardType="numeric"
+              icon="swap-horizontal"
+            />
+
+            <Text style={styles.feeNote}>1% swap fee applies</Text>
+
+            <Button
+              title="Swap"
+              onPress={handleSwap}
+              loading={processing}
+              size="large"
+              style={{ backgroundColor: COLORS.accent }}
+            />
+          </View>
         </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
@@ -420,38 +763,102 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.text,
   },
-  balanceCard: {
+  discountBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.accent + '20',
     marginHorizontal: SPACING.lg,
-    marginBottom: SPACING.lg,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: BORDER_RADIUS.md,
+    marginBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  discountText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.accent,
+    fontWeight: '500',
+    flex: 1,
+  },
+  totalBalanceCard: {
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.md,
     padding: SPACING.lg,
     backgroundColor: COLORS.primary,
   },
-  balanceLabel: {
+  totalBalanceLabel: {
     fontSize: FONT_SIZE.md,
     color: COLORS.white + 'CC',
     marginBottom: SPACING.xs,
   },
-  balanceAmount: {
+  totalBalanceAmount: {
     fontSize: 36,
     fontWeight: 'bold',
     color: COLORS.white,
     marginBottom: SPACING.sm,
   },
-  pointsRow: {
+  loyaltyRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.xs,
-    marginBottom: SPACING.lg,
   },
-  pointsText: {
+  loyaltyText: {
     fontSize: FONT_SIZE.sm,
     color: COLORS.white,
   },
-  balanceActions: {
+  balancesGrid: {
     flexDirection: 'row',
-    gap: SPACING.md,
+    flexWrap: 'wrap',
+    paddingHorizontal: SPACING.lg,
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
   },
-  actionButton: {
+  balanceCard: {
+    width: '48%',
+    padding: SPACING.md,
+    alignItems: 'center',
+  },
+  costCard: {
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+  },
+  balanceIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: SPACING.xs,
+  },
+  balanceCurrency: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    marginBottom: 2,
+  },
+  balanceAmount: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  discountBadge: {
+    backgroundColor: COLORS.accent,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderRadius: BORDER_RADIUS.sm,
+    marginTop: SPACING.xs,
+  },
+  discountBadgeText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.white,
+    fontWeight: '600',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    paddingHorizontal: SPACING.lg,
+    gap: SPACING.sm,
+    marginBottom: SPACING.lg,
+  },
+  actionBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -460,16 +867,49 @@ const styles = StyleSheet.create({
     borderRadius: BORDER_RADIUS.lg,
     gap: SPACING.xs,
   },
-  depositButton: {
-    backgroundColor: COLORS.secondary,
-  },
-  withdrawButton: {
-    backgroundColor: COLORS.surfaceLight,
-  },
-  actionButtonText: {
+  actionBtnText: {
     color: COLORS.white,
     fontWeight: '600',
+    fontSize: FONT_SIZE.sm,
+  },
+  section: {
+    paddingHorizontal: SPACING.lg,
+    marginBottom: SPACING.md,
+  },
+  sectionTitle: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginBottom: SPACING.sm,
+  },
+  solanaCard: {
+    padding: SPACING.md,
+  },
+  solanaHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginBottom: SPACING.xs,
+  },
+  solanaLabel: {
     fontSize: FONT_SIZE.md,
+    color: '#9945FF',
+    fontWeight: '600',
+  },
+  solanaAddress: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    fontFamily: 'monospace',
+  },
+  networkBadge: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textMuted,
+    marginTop: SPACING.xs,
+  },
+  noWalletText: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textMuted,
+    textAlign: 'center',
   },
   quickActions: {
     flexDirection: 'row',
@@ -496,15 +936,6 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.sm,
     color: COLORS.text,
     fontWeight: '500',
-  },
-  section: {
-    paddingHorizontal: SPACING.lg,
-  },
-  sectionTitle: {
-    fontSize: FONT_SIZE.xl,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACING.md,
   },
   emptyCard: {
     alignItems: 'center',
@@ -550,10 +981,9 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.md,
     fontWeight: '600',
   },
-  statusText: {
+  discountApplied: {
     fontSize: FONT_SIZE.xs,
-    color: COLORS.textMuted,
-    textTransform: 'capitalize',
+    color: COLORS.success,
   },
   modalOverlay: {
     flex: 1,
@@ -561,7 +991,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalScrollContent: {
-    maxHeight: '80%',
+    maxHeight: '85%',
   },
   modalContent: {
     backgroundColor: COLORS.background,
@@ -581,12 +1011,54 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.text,
   },
-  modalNote: {
+  modalSubtitle: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textSecondary,
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.sm,
+  },
+  currencySelector: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  currencyOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.md,
+    gap: SPACING.xs,
+  },
+  currencyOptionActive: {
+    backgroundColor: COLORS.primary,
+  },
+  currencyOptionText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
+  currencyOptionTextActive: {
+    color: COLORS.white,
+  },
+  mockNote: {
     fontSize: FONT_SIZE.sm,
     color: COLORS.warning,
     marginBottom: SPACING.lg,
     backgroundColor: COLORS.warning + '20',
     padding: SPACING.md,
     borderRadius: BORDER_RADIUS.md,
+  },
+  swapArrow: {
+    alignItems: 'center',
+    marginVertical: SPACING.sm,
+  },
+  feeNote: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+    marginBottom: SPACING.md,
   },
 });

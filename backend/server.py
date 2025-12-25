@@ -14,6 +14,7 @@ import jwt
 import bcrypt
 import re
 import base64
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -27,6 +28,44 @@ db = client[os.environ.get('DB_NAME', 'commuteshare')]
 JWT_SECRET = os.environ.get('JWT_SECRET', 'commuteshare-secret-key-2025')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION_HOURS = 24 * 7  # 7 days
+
+# Solana Configuration
+SOLANA_NETWORK = os.environ.get('SOLANA_NETWORK', 'devnet')  # devnet, testnet, mainnet-beta
+SOLANA_RPC_URL = {
+    'devnet': 'https://api.devnet.solana.com',
+    'testnet': 'https://api.testnet.solana.com',
+    'mainnet-beta': 'https://api.mainnet-beta.solana.com'
+}.get(SOLANA_NETWORK, 'https://api.devnet.solana.com')
+
+# COST Token Configuration (Update after deployment)
+COST_TOKEN_MINT = os.environ.get('COST_TOKEN_MINT', '')  # Will be set after token creation
+COST_TOKEN_DECIMALS = 9
+
+# USDT Token Addresses on Solana
+USDT_TOKEN_MINT = {
+    'devnet': 'So11111111111111111111111111111111111111112',  # Wrapped SOL for testing
+    'mainnet-beta': 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'  # Real USDT
+}.get(SOLANA_NETWORK, 'So11111111111111111111111111111111111111112')
+
+# Currency data by country code
+CURRENCY_DATA = {
+    'NG': {'code': 'NGN', 'symbol': '₦', 'name': 'Nigerian Naira'},
+    'US': {'code': 'USD', 'symbol': '$', 'name': 'US Dollar'},
+    'GB': {'code': 'GBP', 'symbol': '£', 'name': 'British Pound'},
+    'EU': {'code': 'EUR', 'symbol': '€', 'name': 'Euro'},
+    'GH': {'code': 'GHS', 'symbol': 'GH₵', 'name': 'Ghanaian Cedi'},
+    'KE': {'code': 'KES', 'symbol': 'KSh', 'name': 'Kenyan Shilling'},
+    'ZA': {'code': 'ZAR', 'symbol': 'R', 'name': 'South African Rand'},
+    'IN': {'code': 'INR', 'symbol': '₹', 'name': 'Indian Rupee'},
+    'CN': {'code': 'CNY', 'symbol': '¥', 'name': 'Chinese Yuan'},
+    'JP': {'code': 'JPY', 'symbol': '¥', 'name': 'Japanese Yen'},
+    'AE': {'code': 'AED', 'symbol': 'د.إ', 'name': 'UAE Dirham'},
+    'CA': {'code': 'CAD', 'symbol': 'C$', 'name': 'Canadian Dollar'},
+    'AU': {'code': 'AUD', 'symbol': 'A$', 'name': 'Australian Dollar'},
+    'BR': {'code': 'BRL', 'symbol': 'R$', 'name': 'Brazilian Real'},
+    'MX': {'code': 'MXN', 'symbol': 'MX$', 'name': 'Mexican Peso'},
+    'DEFAULT': {'code': 'USD', 'symbol': '$', 'name': 'US Dollar'},
+}
 
 # Security
 security = HTTPBearer(auto_error=False)
@@ -54,10 +93,10 @@ class UserRegister(BaseModel):
     phone: str
     nin: Optional[str] = None
     university_name: Optional[str] = None
+    country_code: Optional[str] = 'NG'
     
     @validator('email')
     def validate_email(cls, v):
-        # Check for university email pattern or valid email
         email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_pattern, v):
             raise ValueError('Invalid email format')
@@ -76,7 +115,14 @@ class UserResponse(BaseModel):
     is_verified: bool = False
     wallet_balance: float = 0.0
     loyalty_points: int = 0
+    country_code: str = 'NG'
+    currency: Dict[str, str] = {}
     created_at: datetime
+    # Crypto wallets
+    solana_wallet: Optional[str] = None
+    cost_balance: float = 0.0
+    sol_balance: float = 0.0
+    usdt_balance: float = 0.0
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -88,14 +134,18 @@ class WalletTransaction(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
     amount: float
-    transaction_type: str  # deposit, withdrawal, purchase, sale, refund
+    currency: str  # NGN, USD, SOL, USDT, COST
+    transaction_type: str  # deposit, withdrawal, purchase, sale, refund, swap
     description: str
-    status: str = "completed"  # pending, completed, failed
+    status: str = "completed"
     reference: Optional[str] = None
+    discount_applied: float = 0.0
+    original_amount: float = 0.0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class DepositRequest(BaseModel):
     amount: float
+    currency: str = 'fiat'  # fiat, SOL, USDT, COST
     
     @validator('amount')
     def validate_amount(cls, v):
@@ -105,9 +155,11 @@ class DepositRequest(BaseModel):
 
 class WithdrawalRequest(BaseModel):
     amount: float
-    bank_name: str
-    account_number: str
-    account_name: str
+    currency: str = 'fiat'  # fiat, SOL, USDT, COST
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
+    account_name: Optional[str] = None
+    solana_address: Optional[str] = None
     
     @validator('amount')
     def validate_amount(cls, v):
@@ -115,17 +167,37 @@ class WithdrawalRequest(BaseModel):
             raise ValueError('Amount must be positive')
         return v
 
+class SwapRequest(BaseModel):
+    from_currency: str  # fiat, SOL, USDT, COST
+    to_currency: str
+    amount: float
+
+class PaymentRequest(BaseModel):
+    amount: float
+    currency: str = 'fiat'  # fiat, SOL, USDT, COST
+    description: str
+    recipient_id: Optional[str] = None
+
+# Crypto Wallet Models
+class CreateSolanaWallet(BaseModel):
+    pass  # No params needed, generates new wallet
+
+class ImportSolanaWallet(BaseModel):
+    private_key: str  # Base58 encoded
+
 # Product Models
 class ProductCreate(BaseModel):
     title: str
     description: str
     price: float
-    category: str  # electronics, fashion, books, furniture, food, services
+    price_in_cost: Optional[float] = None  # Price in COST tokens
+    category: str
     subcategory: Optional[str] = None
-    condition: str = "new"  # new, like_new, good, fair
-    images: List[str] = []  # base64 encoded images
+    condition: str = "new"
+    images: List[str] = []
     location: Optional[str] = None
     quantity: int = 1
+    accept_cost_token: bool = True  # Accept COST token payments
 
 class Product(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -134,6 +206,7 @@ class Product(BaseModel):
     title: str
     description: str
     price: float
+    price_in_cost: Optional[float] = None
     category: str
     subcategory: Optional[str] = None
     condition: str = "new"
@@ -142,6 +215,7 @@ class Product(BaseModel):
     quantity: int = 1
     is_available: bool = True
     views: int = 0
+    accept_cost_token: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -151,6 +225,7 @@ class OrderCreate(BaseModel):
     quantity: int = 1
     delivery_address: Optional[str] = None
     notes: Optional[str] = None
+    payment_currency: str = 'fiat'  # fiat, SOL, USDT, COST
 
 class Order(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -164,22 +239,27 @@ class Order(BaseModel):
     quantity: int
     unit_price: float
     total_amount: float
+    discount_applied: float = 0.0
+    final_amount: float = 0.0
+    payment_currency: str = 'fiat'
     delivery_address: Optional[str] = None
     notes: Optional[str] = None
-    status: str = "pending"  # pending, confirmed, in_transit, delivered, cancelled, refunded
+    status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-# Service Models (for makeup, photography, project writing, etc.)
+# Service Models
 class ServiceCreate(BaseModel):
     title: str
     description: str
     price: float
-    service_type: str  # makeup, photography, project_writing, topic_verification, tutoring, other
-    duration: Optional[str] = None  # e.g., "2 hours", "1 day"
+    price_in_cost: Optional[float] = None
+    service_type: str
+    duration: Optional[str] = None
     images: List[str] = []
     location: Optional[str] = None
     availability: Optional[str] = None
+    accept_cost_token: bool = True
 
 class Service(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -188,6 +268,7 @@ class Service(BaseModel):
     title: str
     description: str
     price: float
+    price_in_cost: Optional[float] = None
     service_type: str
     duration: Optional[str] = None
     images: List[str] = []
@@ -196,15 +277,16 @@ class Service(BaseModel):
     rating: float = 0.0
     total_reviews: int = 0
     is_available: bool = True
+    accept_cost_token: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-# Service Booking
 class ServiceBookingCreate(BaseModel):
     service_id: str
-    scheduled_date: str  # ISO date string
+    scheduled_date: str
     scheduled_time: Optional[str] = None
     notes: Optional[str] = None
     location: Optional[str] = None
+    payment_currency: str = 'fiat'
 
 class ServiceBooking(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -219,7 +301,10 @@ class ServiceBooking(BaseModel):
     notes: Optional[str] = None
     location: Optional[str] = None
     amount: float
-    status: str = "pending"  # pending, confirmed, in_progress, completed, cancelled
+    discount_applied: float = 0.0
+    final_amount: float = 0.0
+    payment_currency: str = 'fiat'
+    status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 # Restaurant & Food Models
@@ -231,6 +316,7 @@ class RestaurantCreate(BaseModel):
     phone: str
     opening_hours: Optional[str] = None
     image: Optional[str] = None
+    accept_cost_token: bool = True
 
 class Restaurant(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -246,6 +332,7 @@ class Restaurant(BaseModel):
     total_reviews: int = 0
     is_open: bool = True
     is_verified: bool = False
+    accept_cost_token: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class MenuItemCreate(BaseModel):
@@ -253,7 +340,8 @@ class MenuItemCreate(BaseModel):
     name: str
     description: str
     price: float
-    category: str  # appetizer, main, dessert, drinks
+    price_in_cost: Optional[float] = None
+    category: str
     image: Optional[str] = None
     is_available: bool = True
 
@@ -263,6 +351,7 @@ class MenuItem(BaseModel):
     name: str
     description: str
     price: float
+    price_in_cost: Optional[float] = None
     category: str
     image: Optional[str] = None
     is_available: bool = True
@@ -270,9 +359,10 @@ class MenuItem(BaseModel):
 
 class FoodOrderCreate(BaseModel):
     restaurant_id: str
-    items: List[Dict[str, Any]]  # [{menu_item_id, quantity}]
+    items: List[Dict[str, Any]]
     delivery_address: str
     notes: Optional[str] = None
+    payment_currency: str = 'fiat'
 
 class FoodOrder(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -283,17 +373,20 @@ class FoodOrder(BaseModel):
     items: List[Dict[str, Any]]
     subtotal: float
     delivery_fee: float = 200.0
+    discount_applied: float = 0.0
     total_amount: float
+    final_amount: float = 0.0
+    payment_currency: str = 'fiat'
     delivery_address: str
     notes: Optional[str] = None
-    status: str = "pending"  # pending, confirmed, preparing, ready, in_transit, delivered, cancelled
+    status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 # Review Model
 class ReviewCreate(BaseModel):
-    target_id: str  # product_id, service_id, or restaurant_id
-    target_type: str  # product, service, restaurant
-    rating: int  # 1-5
+    target_id: str
+    target_type: str
+    rating: int
     comment: Optional[str] = None
 
 class Review(BaseModel):
@@ -338,16 +431,107 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+def get_currency_for_country(country_code: str) -> Dict[str, str]:
+    return CURRENCY_DATA.get(country_code.upper(), CURRENCY_DATA['DEFAULT'])
+
+def calculate_discount(user: dict, payment_currency: str, amount: float) -> tuple:
+    """
+    Calculate discount based on payment method and user tenure.
+    - 5% discount for any currency payment
+    - 15-50% discount for COST token (first year)
+    """
+    join_date = user.get('created_at', datetime.utcnow())
+    days_since_joining = (datetime.utcnow() - join_date).days
+    is_first_year = days_since_joining <= 365
+    
+    if payment_currency == 'COST' and is_first_year:
+        # Progressive discount: starts at 50%, decreases to 15% over the year
+        # Day 0: 50%, Day 365: 15%
+        discount_range = 50 - 15  # 35% range
+        days_factor = days_since_joining / 365
+        discount_percent = 50 - (discount_range * days_factor)
+        discount_percent = max(15, min(50, discount_percent))  # Clamp between 15-50
+    elif payment_currency == 'COST':
+        # After first year, COST still gets 15% discount
+        discount_percent = 15
+    else:
+        # Any other currency gets 5% discount
+        discount_percent = 5
+    
+    discount_amount = amount * (discount_percent / 100)
+    final_amount = amount - discount_amount
+    
+    return discount_percent, discount_amount, final_amount
+
+async def get_exchange_rates():
+    """Get current exchange rates (mock for now, integrate real API later)"""
+    # Mock exchange rates - in production, use CoinGecko, Binance, or similar API
+    return {
+        'SOL_USD': 180.0,
+        'USDT_USD': 1.0,
+        'COST_USD': 0.05,  # Initial COST token price
+        'USD_NGN': 1600.0,
+        'USD_GBP': 0.79,
+        'USD_EUR': 0.92,
+        'USD_GHS': 15.5,
+        'USD_KES': 153.0,
+        'USD_ZAR': 18.5,
+        'USD_INR': 83.5,
+        'USD_CNY': 7.2,
+        'USD_JPY': 157.0,
+        'USD_AED': 3.67,
+        'USD_CAD': 1.36,
+        'USD_AUD': 1.53,
+        'USD_BRL': 5.0,
+        'USD_MXN': 17.2,
+    }
+
+async def convert_currency(amount: float, from_currency: str, to_currency: str) -> float:
+    """Convert between currencies"""
+    rates = await get_exchange_rates()
+    
+    # First convert to USD
+    if from_currency == 'USD':
+        usd_amount = amount
+    elif from_currency == 'SOL':
+        usd_amount = amount * rates['SOL_USD']
+    elif from_currency == 'USDT':
+        usd_amount = amount * rates['USDT_USD']
+    elif from_currency == 'COST':
+        usd_amount = amount * rates['COST_USD']
+    else:
+        # Fiat currency
+        rate_key = f'USD_{from_currency}'
+        if rate_key in rates:
+            usd_amount = amount / rates[rate_key]
+        else:
+            usd_amount = amount  # Assume USD if unknown
+    
+    # Then convert from USD to target
+    if to_currency == 'USD':
+        return usd_amount
+    elif to_currency == 'SOL':
+        return usd_amount / rates['SOL_USD']
+    elif to_currency == 'USDT':
+        return usd_amount / rates['USDT_USD']
+    elif to_currency == 'COST':
+        return usd_amount / rates['COST_USD']
+    else:
+        rate_key = f'USD_{to_currency}'
+        if rate_key in rates:
+            return usd_amount * rates[rate_key]
+        return usd_amount
+
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(data: UserRegister):
-    # Check if user exists
     existing = await db.users.find_one({"email": data.email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Create user
+    currency = get_currency_for_country(data.country_code or 'NG')
+    
     user_id = str(uuid.uuid4())
     user = {
         "id": user_id,
@@ -357,9 +541,16 @@ async def register(data: UserRegister):
         "phone": data.phone,
         "nin": data.nin,
         "university_name": data.university_name,
+        "country_code": data.country_code or 'NG',
+        "currency": currency,
         "is_verified": False,
         "wallet_balance": 0.0,
         "loyalty_points": 0,
+        # Crypto balances
+        "solana_wallet": None,
+        "cost_balance": 0.0,
+        "sol_balance": 0.0,
+        "usdt_balance": 0.0,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
@@ -379,7 +570,13 @@ async def register(data: UserRegister):
             is_verified=user["is_verified"],
             wallet_balance=user["wallet_balance"],
             loyalty_points=user["loyalty_points"],
-            created_at=user["created_at"]
+            country_code=user["country_code"],
+            currency=user["currency"],
+            created_at=user["created_at"],
+            solana_wallet=user.get("solana_wallet"),
+            cost_balance=user.get("cost_balance", 0.0),
+            sol_balance=user.get("sol_balance", 0.0),
+            usdt_balance=user.get("usdt_balance", 0.0),
         )
     )
 
@@ -402,7 +599,13 @@ async def login(data: UserLogin):
             is_verified=user.get("is_verified", False),
             wallet_balance=user.get("wallet_balance", 0.0),
             loyalty_points=user.get("loyalty_points", 0),
-            created_at=user["created_at"]
+            country_code=user.get("country_code", 'NG'),
+            currency=user.get("currency", get_currency_for_country('NG')),
+            created_at=user["created_at"],
+            solana_wallet=user.get("solana_wallet"),
+            cost_balance=user.get("cost_balance", 0.0),
+            sol_balance=user.get("sol_balance", 0.0),
+            usdt_balance=user.get("usdt_balance", 0.0),
         )
     )
 
@@ -417,83 +620,209 @@ async def get_me(user: dict = Depends(get_current_user)):
         is_verified=user.get("is_verified", False),
         wallet_balance=user.get("wallet_balance", 0.0),
         loyalty_points=user.get("loyalty_points", 0),
-        created_at=user["created_at"]
+        country_code=user.get("country_code", 'NG'),
+        currency=user.get("currency", get_currency_for_country('NG')),
+        created_at=user["created_at"],
+        solana_wallet=user.get("solana_wallet"),
+        cost_balance=user.get("cost_balance", 0.0),
+        sol_balance=user.get("sol_balance", 0.0),
+        usdt_balance=user.get("usdt_balance", 0.0),
     )
+
+@api_router.put("/auth/country")
+async def update_country(country_code: str, user: dict = Depends(get_current_user)):
+    currency = get_currency_for_country(country_code)
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"country_code": country_code, "currency": currency}}
+    )
+    return {"message": "Country updated", "currency": currency}
 
 # ==================== WALLET ROUTES ====================
 
 @api_router.get("/wallet/balance")
 async def get_wallet_balance(user: dict = Depends(get_current_user)):
+    rates = await get_exchange_rates()
+    currency = user.get('currency', get_currency_for_country('NG'))
+    
+    # Calculate total balance in user's local currency
+    fiat_balance = user.get("wallet_balance", 0.0)
+    sol_in_fiat = await convert_currency(user.get("sol_balance", 0.0), 'SOL', currency['code'])
+    usdt_in_fiat = await convert_currency(user.get("usdt_balance", 0.0), 'USDT', currency['code'])
+    cost_in_fiat = await convert_currency(user.get("cost_balance", 0.0), 'COST', currency['code'])
+    
+    total_in_fiat = fiat_balance + sol_in_fiat + usdt_in_fiat + cost_in_fiat
+    
     return {
-        "balance": user.get("wallet_balance", 0.0),
-        "loyalty_points": user.get("loyalty_points", 0)
+        "fiat_balance": user.get("wallet_balance", 0.0),
+        "sol_balance": user.get("sol_balance", 0.0),
+        "usdt_balance": user.get("usdt_balance", 0.0),
+        "cost_balance": user.get("cost_balance", 0.0),
+        "total_in_fiat": total_in_fiat,
+        "loyalty_points": user.get("loyalty_points", 0),
+        "currency": currency,
+        "solana_wallet": user.get("solana_wallet"),
+        "exchange_rates": rates,
     }
 
 @api_router.post("/wallet/deposit")
 async def deposit_funds(data: DepositRequest, user: dict = Depends(get_current_user)):
-    # Mock Paystack deposit - In production, integrate with Paystack
-    new_balance = user.get("wallet_balance", 0.0) + data.amount
+    currency = data.currency.upper()
+    balance_field = {
+        'FIAT': 'wallet_balance',
+        'SOL': 'sol_balance',
+        'USDT': 'usdt_balance',
+        'COST': 'cost_balance',
+    }.get(currency, 'wallet_balance')
+    
+    current_balance = user.get(balance_field, 0.0)
+    new_balance = current_balance + data.amount
     
     await db.users.update_one(
         {"id": user["id"]},
-        {"$set": {"wallet_balance": new_balance}}
+        {"$set": {balance_field: new_balance}}
     )
     
-    # Record transaction
     transaction = WalletTransaction(
         user_id=user["id"],
         amount=data.amount,
+        currency=currency,
         transaction_type="deposit",
-        description=f"Wallet deposit of ₦{data.amount:,.2f}",
+        description=f"Deposit of {data.amount} {currency}",
         reference=f"DEP-{uuid.uuid4().hex[:8].upper()}"
     )
     await db.transactions.insert_one(transaction.dict())
     
     return {
-        "message": "Deposit successful (Mock)",
+        "message": f"Deposit successful (Mock)",
         "new_balance": new_balance,
+        "currency": currency,
         "reference": transaction.reference
     }
 
 @api_router.post("/wallet/withdraw")
 async def withdraw_funds(data: WithdrawalRequest, user: dict = Depends(get_current_user)):
-    current_balance = user.get("wallet_balance", 0.0)
+    currency = data.currency.upper()
+    balance_field = {
+        'FIAT': 'wallet_balance',
+        'SOL': 'sol_balance',
+        'USDT': 'usdt_balance',
+        'COST': 'cost_balance',
+    }.get(currency, 'wallet_balance')
+    
+    current_balance = user.get(balance_field, 0.0)
     
     if data.amount > current_balance:
-        raise HTTPException(status_code=400, detail="Insufficient balance")
+        raise HTTPException(status_code=400, detail=f"Insufficient {currency} balance")
     
-    # Verify bank account name matches user name (anti-fraud)
-    # In production, use Paystack's account verification API
-    user_name_parts = user["full_name"].lower().split()
-    account_name_parts = data.account_name.lower().split()
+    # For fiat withdrawals, verify bank account name
+    if currency == 'FIAT' and data.account_name:
+        user_name_parts = user["full_name"].lower().split()
+        account_name_parts = data.account_name.lower().split()
+        name_match = any(part in account_name_parts for part in user_name_parts)
+        if not name_match:
+            raise HTTPException(
+                status_code=400,
+                detail="Bank account name must match your registered name for security"
+            )
     
-    # Check if at least surname matches
-    name_match = any(part in account_name_parts for part in user_name_parts)
-    if not name_match:
-        raise HTTPException(
-            status_code=400, 
-            detail="Bank account name must match your registered name for security"
-        )
+    # For crypto withdrawals, verify solana address
+    if currency in ['SOL', 'USDT', 'COST'] and not data.solana_address:
+        raise HTTPException(status_code=400, detail="Solana address required for crypto withdrawal")
     
     new_balance = current_balance - data.amount
     
     await db.users.update_one(
         {"id": user["id"]},
-        {"$set": {"wallet_balance": new_balance}}
+        {"$set": {balance_field: new_balance}}
     )
     
     transaction = WalletTransaction(
         user_id=user["id"],
         amount=data.amount,
+        currency=currency,
         transaction_type="withdrawal",
-        description=f"Withdrawal to {data.bank_name} - {data.account_number}",
+        description=f"Withdrawal of {data.amount} {currency}",
         reference=f"WTH-{uuid.uuid4().hex[:8].upper()}"
     )
     await db.transactions.insert_one(transaction.dict())
     
     return {
-        "message": "Withdrawal request submitted (Mock - funds will be transferred)",
+        "message": f"Withdrawal request submitted (Mock)",
         "new_balance": new_balance,
+        "currency": currency,
+        "reference": transaction.reference
+    }
+
+@api_router.post("/wallet/swap")
+async def swap_currency(data: SwapRequest, user: dict = Depends(get_current_user)):
+    """Swap between currencies"""
+    from_currency = data.from_currency.upper()
+    to_currency = data.to_currency.upper()
+    
+    from_field = {
+        'FIAT': 'wallet_balance',
+        'SOL': 'sol_balance',
+        'USDT': 'usdt_balance',
+        'COST': 'cost_balance',
+    }.get(from_currency, 'wallet_balance')
+    
+    to_field = {
+        'FIAT': 'wallet_balance',
+        'SOL': 'sol_balance',
+        'USDT': 'usdt_balance',
+        'COST': 'cost_balance',
+    }.get(to_currency, 'wallet_balance')
+    
+    from_balance = user.get(from_field, 0.0)
+    
+    if data.amount > from_balance:
+        raise HTTPException(status_code=400, detail=f"Insufficient {from_currency} balance")
+    
+    # Get user's fiat currency for conversion
+    user_currency = user.get('currency', {}).get('code', 'USD')
+    if from_currency == 'FIAT':
+        from_currency = user_currency
+    if to_currency == 'FIAT':
+        to_currency = user_currency
+    
+    # Convert amount
+    converted_amount = await convert_currency(data.amount, from_currency, to_currency)
+    
+    # Apply 1% swap fee
+    swap_fee = converted_amount * 0.01
+    final_amount = converted_amount - swap_fee
+    
+    # Update balances
+    new_from_balance = from_balance - data.amount
+    to_balance = user.get(to_field, 0.0)
+    new_to_balance = to_balance + final_amount
+    
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {
+            from_field: new_from_balance,
+            to_field: new_to_balance
+        }}
+    )
+    
+    transaction = WalletTransaction(
+        user_id=user["id"],
+        amount=data.amount,
+        currency=f"{data.from_currency}->{data.to_currency}",
+        transaction_type="swap",
+        description=f"Swapped {data.amount} {data.from_currency} to {final_amount:.6f} {data.to_currency}",
+        reference=f"SWP-{uuid.uuid4().hex[:8].upper()}"
+    )
+    await db.transactions.insert_one(transaction.dict())
+    
+    return {
+        "message": "Swap successful",
+        "from_currency": data.from_currency,
+        "to_currency": data.to_currency,
+        "amount_sent": data.amount,
+        "amount_received": final_amount,
+        "swap_fee": swap_fee,
         "reference": transaction.reference
     }
 
@@ -504,14 +833,118 @@ async def get_transactions(user: dict = Depends(get_current_user)):
     ).sort("created_at", -1).to_list(100)
     return transactions
 
+@api_router.get("/wallet/exchange-rates")
+async def get_rates():
+    rates = await get_exchange_rates()
+    return rates
+
+@api_router.get("/wallet/discount-info")
+async def get_discount_info(user: dict = Depends(get_current_user)):
+    """Get discount information for the user"""
+    join_date = user.get('created_at', datetime.utcnow())
+    days_since_joining = (datetime.utcnow() - join_date).days
+    is_first_year = days_since_joining <= 365
+    
+    # Calculate current COST discount
+    if is_first_year:
+        discount_range = 50 - 15
+        days_factor = days_since_joining / 365
+        cost_discount = 50 - (discount_range * days_factor)
+        cost_discount = max(15, min(50, cost_discount))
+    else:
+        cost_discount = 15
+    
+    return {
+        "days_since_joining": days_since_joining,
+        "is_first_year": is_first_year,
+        "discounts": {
+            "fiat": 5,
+            "sol": 5,
+            "usdt": 5,
+            "cost": round(cost_discount, 1)
+        },
+        "message": f"Use COST tokens for up to {round(cost_discount, 1)}% discount!" if is_first_year else "Use COST tokens for 15% discount!"
+    }
+
+# ==================== SOLANA WALLET ROUTES ====================
+
+@api_router.post("/wallet/solana/create")
+async def create_solana_wallet(user: dict = Depends(get_current_user)):
+    """Create a new Solana wallet for the user (mock - returns placeholder)"""
+    if user.get("solana_wallet"):
+        raise HTTPException(status_code=400, detail="Solana wallet already exists")
+    
+    # In production, use @solana/web3.js Keypair.generate()
+    # Mock wallet address
+    mock_wallet = f"CS{uuid.uuid4().hex[:30].upper()}"
+    
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"solana_wallet": mock_wallet}}
+    )
+    
+    return {
+        "message": "Solana wallet created (Mock)",
+        "wallet_address": mock_wallet,
+        "network": SOLANA_NETWORK,
+        "note": "In production, this would generate a real Solana keypair"
+    }
+
+@api_router.get("/wallet/solana/info")
+async def get_solana_wallet_info(user: dict = Depends(get_current_user)):
+    """Get Solana wallet information"""
+    return {
+        "wallet_address": user.get("solana_wallet"),
+        "network": SOLANA_NETWORK,
+        "rpc_url": SOLANA_RPC_URL,
+        "cost_token_mint": COST_TOKEN_MINT or "Not deployed yet",
+        "usdt_token_mint": USDT_TOKEN_MINT,
+        "balances": {
+            "SOL": user.get("sol_balance", 0.0),
+            "USDT": user.get("usdt_balance", 0.0),
+            "COST": user.get("cost_balance", 0.0),
+        }
+    }
+
+# ==================== TOKEN INFO ROUTES ====================
+
+@api_router.get("/token/info")
+async def get_token_info():
+    """Get COST token information"""
+    rates = await get_exchange_rates()
+    return {
+        "name": "CommuteShare Token",
+        "symbol": "COST",
+        "decimals": COST_TOKEN_DECIMALS,
+        "network": SOLANA_NETWORK,
+        "mint_address": COST_TOKEN_MINT or "Not deployed yet",
+        "price_usd": rates['COST_USD'],
+        "benefits": [
+            "15-50% discount on all transactions (first year)",
+            "15% discount after first year",
+            "Loyalty rewards",
+            "Governance voting (coming soon)",
+            "Staking rewards (coming soon)"
+        ],
+        "total_supply": "1,000,000,000 COST",
+        "circulating_supply": "100,000,000 COST (testnet)"
+    }
+
 # ==================== MARKETPLACE ROUTES ====================
 
 @api_router.post("/products", response_model=Product)
 async def create_product(data: ProductCreate, user: dict = Depends(get_current_user)):
+    # Calculate COST price if not provided (based on exchange rate)
+    price_in_cost = data.price_in_cost
+    if not price_in_cost:
+        user_currency = user.get('currency', {}).get('code', 'NGN')
+        price_in_cost = await convert_currency(data.price, user_currency, 'COST')
+    
     product = Product(
         seller_id=user["id"],
         seller_name=user["full_name"],
-        **data.dict()
+        price_in_cost=price_in_cost,
+        **data.dict(exclude={'price_in_cost'})
     )
     await db.products.insert_one(product.dict())
     return product
@@ -550,7 +983,6 @@ async def get_product(product_id: str):
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Increment views
     await db.products.update_one(
         {"id": product_id},
         {"$inc": {"views": 1}}
@@ -605,16 +1037,37 @@ async def create_order(data: OrderCreate, user: dict = Depends(get_current_user)
     if product["seller_id"] == user["id"]:
         raise HTTPException(status_code=400, detail="Cannot buy your own product")
     
-    total_amount = product["price"] * data.quantity
+    # Get price based on payment currency
+    payment_currency = data.payment_currency.upper()
+    if payment_currency == 'COST' and product.get('price_in_cost'):
+        unit_price = product['price_in_cost']
+    else:
+        unit_price = product["price"]
     
-    # Check wallet balance
-    if user.get("wallet_balance", 0.0) < total_amount:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+    total_amount = unit_price * data.quantity
+    
+    # Calculate discount
+    discount_percent, discount_amount, final_amount = calculate_discount(
+        user, payment_currency, total_amount
+    )
+    
+    # Determine which balance to use
+    balance_field = {
+        'FIAT': 'wallet_balance',
+        'SOL': 'sol_balance',
+        'USDT': 'usdt_balance',
+        'COST': 'cost_balance',
+    }.get(payment_currency, 'wallet_balance')
+    
+    user_balance = user.get(balance_field, 0.0)
+    
+    if user_balance < final_amount:
+        raise HTTPException(status_code=400, detail=f"Insufficient {payment_currency} balance")
     
     # Deduct from buyer wallet
     await db.users.update_one(
         {"id": user["id"]},
-        {"$inc": {"wallet_balance": -total_amount}}
+        {"$inc": {balance_field: -final_amount}}
     )
     
     # Create order
@@ -627,8 +1080,11 @@ async def create_order(data: OrderCreate, user: dict = Depends(get_current_user)
         product_title=product["title"],
         product_image=product["images"][0] if product.get("images") else None,
         quantity=data.quantity,
-        unit_price=product["price"],
+        unit_price=unit_price,
         total_amount=total_amount,
+        discount_applied=discount_amount,
+        final_amount=final_amount,
+        payment_currency=payment_currency,
         delivery_address=data.delivery_address,
         notes=data.notes
     )
@@ -648,9 +1104,12 @@ async def create_order(data: OrderCreate, user: dict = Depends(get_current_user)
     # Record transaction
     transaction = WalletTransaction(
         user_id=user["id"],
-        amount=total_amount,
+        amount=final_amount,
+        currency=payment_currency,
         transaction_type="purchase",
         description=f"Purchase: {product['title']}",
+        discount_applied=discount_amount,
+        original_amount=total_amount,
         reference=f"ORD-{order.id[:8].upper()}"
     )
     await db.transactions.insert_one(transaction.dict())
@@ -681,7 +1140,6 @@ async def update_order_status(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    # Only seller can update most statuses, buyer can confirm delivery
     if order["seller_id"] != user["id"] and order["buyer_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
@@ -691,15 +1149,23 @@ async def update_order_status(
     
     # If delivered, credit seller
     if status == "delivered" and order["status"] != "delivered":
+        payment_currency = order.get("payment_currency", "FIAT")
+        balance_field = {
+            'FIAT': 'wallet_balance',
+            'SOL': 'sol_balance',
+            'USDT': 'usdt_balance',
+            'COST': 'cost_balance',
+        }.get(payment_currency, 'wallet_balance')
+        
         await db.users.update_one(
             {"id": order["seller_id"]},
-            {"$inc": {"wallet_balance": order["total_amount"]}}
+            {"$inc": {balance_field: order["final_amount"]}}
         )
         
         # Add loyalty points
         await db.users.update_one(
             {"id": order["buyer_id"]},
-            {"$inc": {"loyalty_points": int(order["total_amount"] / 100)}}
+            {"$inc": {"loyalty_points": int(order["final_amount"] / 100)}}
         )
     
     await db.orders.update_one(
@@ -713,10 +1179,16 @@ async def update_order_status(
 
 @api_router.post("/services", response_model=Service)
 async def create_service(data: ServiceCreate, user: dict = Depends(get_current_user)):
+    price_in_cost = data.price_in_cost
+    if not price_in_cost:
+        user_currency = user.get('currency', {}).get('code', 'NGN')
+        price_in_cost = await convert_currency(data.price, user_currency, 'COST')
+    
     service = Service(
         provider_id=user["id"],
         provider_name=user["full_name"],
-        **data.dict()
+        price_in_cost=price_in_cost,
+        **data.dict(exclude={'price_in_cost'})
     )
     await db.services.insert_one(service.dict())
     return service
@@ -763,14 +1235,35 @@ async def book_service(data: ServiceBookingCreate, user: dict = Depends(get_curr
     if service["provider_id"] == user["id"]:
         raise HTTPException(status_code=400, detail="Cannot book your own service")
     
-    # Check wallet balance
-    if user.get("wallet_balance", 0.0) < service["price"]:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+    # Get price based on payment currency
+    payment_currency = data.payment_currency.upper()
+    if payment_currency == 'COST' and service.get('price_in_cost'):
+        amount = service['price_in_cost']
+    else:
+        amount = service["price"]
+    
+    # Calculate discount
+    discount_percent, discount_amount, final_amount = calculate_discount(
+        user, payment_currency, amount
+    )
+    
+    # Determine which balance to use
+    balance_field = {
+        'FIAT': 'wallet_balance',
+        'SOL': 'sol_balance',
+        'USDT': 'usdt_balance',
+        'COST': 'cost_balance',
+    }.get(payment_currency, 'wallet_balance')
+    
+    user_balance = user.get(balance_field, 0.0)
+    
+    if user_balance < final_amount:
+        raise HTTPException(status_code=400, detail=f"Insufficient {payment_currency} balance")
     
     # Deduct from wallet (escrow)
     await db.users.update_one(
         {"id": user["id"]},
-        {"$inc": {"wallet_balance": -service["price"]}}
+        {"$inc": {balance_field: -final_amount}}
     )
     
     booking = ServiceBooking(
@@ -784,17 +1277,22 @@ async def book_service(data: ServiceBookingCreate, user: dict = Depends(get_curr
         scheduled_time=data.scheduled_time,
         notes=data.notes,
         location=data.location,
-        amount=service["price"]
+        amount=amount,
+        discount_applied=discount_amount,
+        final_amount=final_amount,
+        payment_currency=payment_currency
     )
     
     await db.service_bookings.insert_one(booking.dict())
     
-    # Record transaction
     transaction = WalletTransaction(
         user_id=user["id"],
-        amount=service["price"],
+        amount=final_amount,
+        currency=payment_currency,
         transaction_type="purchase",
         description=f"Service Booking: {service['title']}",
+        discount_applied=discount_amount,
+        original_amount=amount,
         reference=f"SVC-{booking.id[:8].upper()}"
     )
     await db.transactions.insert_one(transaction.dict())
@@ -821,15 +1319,22 @@ async def update_booking_status(
     if booking["provider_id"] != user["id"] and booking["client_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # If completed, release payment to provider
     if status == "completed" and booking["status"] != "completed":
+        payment_currency = booking.get("payment_currency", "FIAT")
+        balance_field = {
+            'FIAT': 'wallet_balance',
+            'SOL': 'sol_balance',
+            'USDT': 'usdt_balance',
+            'COST': 'cost_balance',
+        }.get(payment_currency, 'wallet_balance')
+        
         await db.users.update_one(
             {"id": booking["provider_id"]},
-            {"$inc": {"wallet_balance": booking["amount"]}}
+            {"$inc": {balance_field: booking["final_amount"]}}
         )
         await db.users.update_one(
             {"id": booking["client_id"]},
-            {"$inc": {"loyalty_points": int(booking["amount"] / 100)}}
+            {"$inc": {"loyalty_points": int(booking["final_amount"] / 100)}}
         )
     
     await db.service_bookings.update_one(
@@ -877,7 +1382,6 @@ async def get_restaurant(restaurant_id: str):
 
 @api_router.post("/menu-items", response_model=MenuItem)
 async def create_menu_item(data: MenuItemCreate, user: dict = Depends(get_current_user)):
-    # Verify user owns the restaurant
     restaurant = await db.restaurants.find_one({
         "id": data.restaurant_id,
         "owner_id": user["id"]
@@ -885,7 +1389,12 @@ async def create_menu_item(data: MenuItemCreate, user: dict = Depends(get_curren
     if not restaurant:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    menu_item = MenuItem(**data.dict())
+    price_in_cost = data.price_in_cost
+    if not price_in_cost:
+        user_currency = user.get('currency', {}).get('code', 'NGN')
+        price_in_cost = await convert_currency(data.price, user_currency, 'COST')
+    
+    menu_item = MenuItem(price_in_cost=price_in_cost, **data.dict(exclude={'price_in_cost'}))
     await db.menu_items.insert_one(menu_item.dict())
     return menu_item
 
@@ -902,34 +1411,54 @@ async def create_food_order(data: FoodOrderCreate, user: dict = Depends(get_curr
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant not found")
     
-    # Calculate total
+    payment_currency = data.payment_currency.upper()
     subtotal = 0
     order_items = []
     
     for item in data.items:
         menu_item = await db.menu_items.find_one({"id": item["menu_item_id"]})
         if menu_item:
-            item_total = menu_item["price"] * item["quantity"]
+            if payment_currency == 'COST' and menu_item.get('price_in_cost'):
+                item_price = menu_item['price_in_cost']
+            else:
+                item_price = menu_item["price"]
+            item_total = item_price * item["quantity"]
             subtotal += item_total
             order_items.append({
                 "menu_item_id": menu_item["id"],
                 "name": menu_item["name"],
-                "price": menu_item["price"],
+                "price": item_price,
                 "quantity": item["quantity"],
                 "total": item_total
             })
     
     delivery_fee = 200.0
+    if payment_currency == 'COST':
+        user_currency = user.get('currency', {}).get('code', 'NGN')
+        delivery_fee = await convert_currency(200.0, user_currency, 'COST')
+    
     total_amount = subtotal + delivery_fee
     
-    # Check wallet
-    if user.get("wallet_balance", 0.0) < total_amount:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+    # Calculate discount
+    discount_percent, discount_amount, final_amount = calculate_discount(
+        user, payment_currency, total_amount
+    )
     
-    # Deduct from wallet
+    balance_field = {
+        'FIAT': 'wallet_balance',
+        'SOL': 'sol_balance',
+        'USDT': 'usdt_balance',
+        'COST': 'cost_balance',
+    }.get(payment_currency, 'wallet_balance')
+    
+    user_balance = user.get(balance_field, 0.0)
+    
+    if user_balance < final_amount:
+        raise HTTPException(status_code=400, detail=f"Insufficient {payment_currency} balance")
+    
     await db.users.update_one(
         {"id": user["id"]},
-        {"$inc": {"wallet_balance": -total_amount}}
+        {"$inc": {balance_field: -final_amount}}
     )
     
     order = FoodOrder(
@@ -940,19 +1469,24 @@ async def create_food_order(data: FoodOrderCreate, user: dict = Depends(get_curr
         items=order_items,
         subtotal=subtotal,
         delivery_fee=delivery_fee,
+        discount_applied=discount_amount,
         total_amount=total_amount,
+        final_amount=final_amount,
+        payment_currency=payment_currency,
         delivery_address=data.delivery_address,
         notes=data.notes
     )
     
     await db.food_orders.insert_one(order.dict())
     
-    # Record transaction
     transaction = WalletTransaction(
         user_id=user["id"],
-        amount=total_amount,
+        amount=final_amount,
+        currency=payment_currency,
         transaction_type="purchase",
         description=f"Food Order: {restaurant['name']}",
+        discount_applied=discount_amount,
+        original_amount=total_amount,
         reference=f"FOOD-{order.id[:8].upper()}"
     )
     await db.transactions.insert_one(transaction.dict())
@@ -981,15 +1515,22 @@ async def update_food_order_status(
     if restaurant["owner_id"] != user["id"] and order["customer_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # If delivered, credit restaurant owner
     if status == "delivered" and order["status"] != "delivered":
+        payment_currency = order.get("payment_currency", "FIAT")
+        balance_field = {
+            'FIAT': 'wallet_balance',
+            'SOL': 'sol_balance',
+            'USDT': 'usdt_balance',
+            'COST': 'cost_balance',
+        }.get(payment_currency, 'wallet_balance')
+        
         await db.users.update_one(
             {"id": restaurant["owner_id"]},
-            {"$inc": {"wallet_balance": order["subtotal"]}}
+            {"$inc": {balance_field: order["subtotal"]}}
         )
         await db.users.update_one(
             {"id": order["customer_id"]},
-            {"$inc": {"loyalty_points": int(order["total_amount"] / 100)}}
+            {"$inc": {"loyalty_points": int(order["final_amount"] / 100)}}
         )
     
     await db.food_orders.update_one(
@@ -1014,7 +1555,6 @@ async def create_review(data: ReviewCreate, user: dict = Depends(get_current_use
     
     await db.reviews.insert_one(review.dict())
     
-    # Update average rating for target
     collection_map = {
         "product": db.products,
         "service": db.services,
@@ -1067,18 +1607,27 @@ async def get_categories():
             {"id": "fast_food", "name": "Fast Food", "icon": "fast-food"},
             {"id": "drinks", "name": "Drinks & Smoothies", "icon": "cafe"},
             {"id": "snacks", "name": "Snacks", "icon": "pizza"}
-        ]
+        ],
+        "supported_currencies": list(CURRENCY_DATA.values())
     }
 
 # ==================== HEALTH CHECK ====================
 
 @api_router.get("/")
 async def root():
-    return {"message": "CommuteShare API v1.0", "status": "healthy"}
+    return {
+        "message": "CommuteShare API v1.0",
+        "status": "healthy",
+        "features": ["marketplace", "services", "food", "wallet", "COST token"]
+    }
 
 @api_router.get("/health")
 async def health():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "solana_network": SOLANA_NETWORK
+    }
 
 # Include the router
 app.include_router(api_router)
