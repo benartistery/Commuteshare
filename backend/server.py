@@ -444,28 +444,72 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 def get_currency_for_country(country_code: str) -> Dict[str, str]:
     return CURRENCY_DATA.get(country_code.upper(), CURRENCY_DATA['DEFAULT'])
 
+def get_membership_tier(cost_balance: float) -> Dict[str, Any]:
+    """
+    Determine user's membership tier based on COST token balance.
+    Tiers update instantly when balance changes.
+    """
+    if cost_balance >= 100000:
+        tier = 'platinum'
+    elif cost_balance >= 50000:
+        tier = 'gold'
+    elif cost_balance >= 30000:
+        tier = 'silver'
+    elif cost_balance >= 15000:
+        tier = 'bronze'
+    else:
+        tier = 'basic'
+    
+    tier_info = MEMBERSHIP_TIERS[tier]
+    return {
+        'tier': tier,
+        'tier_name': tier.capitalize(),
+        'discount': tier_info['discount'],
+        'color': tier_info['color'],
+        'icon': tier_info['icon'],
+        'min_balance': tier_info['min_balance'],
+        'cost_balance': cost_balance,
+        'next_tier': get_next_tier_info(tier, cost_balance)
+    }
+
+def get_next_tier_info(current_tier: str, current_balance: float) -> Optional[Dict[str, Any]]:
+    """Get info about the next tier and how much COST needed to reach it."""
+    tier_order = ['basic', 'bronze', 'silver', 'gold', 'platinum']
+    current_index = tier_order.index(current_tier)
+    
+    if current_index >= len(tier_order) - 1:
+        return None  # Already at highest tier
+    
+    next_tier = tier_order[current_index + 1]
+    next_tier_info = MEMBERSHIP_TIERS[next_tier]
+    tokens_needed = next_tier_info['min_balance'] - current_balance
+    
+    return {
+        'tier': next_tier,
+        'tier_name': next_tier.capitalize(),
+        'discount': next_tier_info['discount'],
+        'color': next_tier_info['color'],
+        'min_balance': next_tier_info['min_balance'],
+        'tokens_needed': tokens_needed
+    }
+
 def calculate_discount(user: dict, payment_currency: str, amount: float) -> tuple:
     """
-    Calculate discount based on payment method and user tenure.
-    - 5% discount for any currency payment
-    - 15-50% discount for COST token (first year)
+    Calculate discount based on membership tier (COST balance).
+    - Basic (0-14,999 COST): 10% discount
+    - Bronze (15,000+ COST): 20% discount
+    - Silver (30,000+ COST): 30% discount
+    - Gold (50,000+ COST): 40% discount
+    - Platinum (100,000+ COST): 50% discount
     """
-    join_date = user.get('created_at', datetime.utcnow())
-    days_since_joining = (datetime.utcnow() - join_date).days
-    is_first_year = days_since_joining <= 365
+    cost_balance = user.get('cost_balance', 0.0)
+    membership = get_membership_tier(cost_balance)
     
-    if payment_currency == 'COST' and is_first_year:
-        # Progressive discount: starts at 50%, decreases to 15% over the year
-        # Day 0: 50%, Day 365: 15%
-        discount_range = 50 - 15  # 35% range
-        days_factor = days_since_joining / 365
-        discount_percent = 50 - (discount_range * days_factor)
-        discount_percent = max(15, min(50, discount_percent))  # Clamp between 15-50
-    elif payment_currency == 'COST':
-        # After first year, COST still gets 15% discount
-        discount_percent = 15
+    if payment_currency == 'COST':
+        # Use membership tier discount when paying with COST
+        discount_percent = membership['discount']
     else:
-        # Any other currency gets 5% discount
+        # Non-COST payments get a flat 5% discount
         discount_percent = 5
     
     discount_amount = amount * (discount_percent / 100)
