@@ -727,6 +727,9 @@ async def get_wallet_balance(user: dict = Depends(get_current_user)):
     
     total_in_fiat = fiat_balance + sol_in_fiat + usdt_in_fiat + cost_in_fiat
     
+    # Get membership tier
+    membership = get_membership_tier(user.get("cost_balance", 0.0))
+    
     return {
         "fiat_balance": user.get("wallet_balance", 0.0),
         "sol_balance": user.get("sol_balance", 0.0),
@@ -737,6 +740,7 @@ async def get_wallet_balance(user: dict = Depends(get_current_user)):
         "currency": currency,
         "solana_wallet": user.get("solana_wallet"),
         "exchange_rates": rates,
+        "membership": membership,
     }
 
 @api_router.post("/wallet/deposit")
