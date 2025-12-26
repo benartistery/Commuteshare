@@ -133,6 +133,8 @@ class UserResponse(BaseModel):
     cost_balance: float = 0.0
     sol_balance: float = 0.0
     usdt_balance: float = 0.0
+    # Membership tier
+    membership_tier: Optional[Dict[str, Any]] = None
 
 class TokenResponse(BaseModel):
     access_token: str
