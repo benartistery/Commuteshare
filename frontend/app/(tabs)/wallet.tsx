@@ -258,6 +258,16 @@ export default function WalletScreen() {
     }
   };
 
+  const getTierIcon = (tier: string): any => {
+    switch (tier) {
+      case 'platinum': return 'trophy';
+      case 'gold': return 'medal';
+      case 'silver': return 'ribbon';
+      case 'bronze': return 'star';
+      default: return 'person';
+    }
+  };
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-NG', {
