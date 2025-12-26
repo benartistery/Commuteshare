@@ -303,6 +303,43 @@ export default function WalletScreen() {
           </View>
         )}
 
+        {/* Membership Tier Card */}
+        {walletData?.membership && (
+          <Card style={[styles.membershipCard, { borderColor: walletData.membership.color }]}>
+            <View style={styles.membershipHeader}>
+              <View style={[styles.tierBadge, { backgroundColor: walletData.membership.color }]}>
+                <Ionicons 
+                  name={getTierIcon(walletData.membership.tier)} 
+                  size={24} 
+                  color={walletData.membership.tier === 'basic' ? COLORS.white : '#333'} 
+                />
+              </View>
+              <View style={styles.membershipInfo}>
+                <Text style={styles.tierName}>{walletData.membership.tier_name} Member</Text>
+                <Text style={styles.tierDiscount}>{walletData.membership.discount}% discount with COST</Text>
+              </View>
+            </View>
+            {walletData.membership.next_tier && (
+              <View style={styles.nextTierProgress}>
+                <View style={styles.progressBar}>
+                  <View 
+                    style={[
+                      styles.progressFill, 
+                      { 
+                        width: `${Math.min(100, (walletData.membership.cost_balance / walletData.membership.next_tier.min_balance) * 100)}%`,
+                        backgroundColor: walletData.membership.next_tier.color 
+                      }
+                    ]} 
+                  />
+                </View>
+                <Text style={styles.nextTierText}>
+                  {walletData.membership.next_tier.tokens_needed.toLocaleString()} COST to {walletData.membership.next_tier.tier_name}
+                </Text>
+              </View>
+            )}
+          </Card>
+        )}
+
         {/* Total Balance Card */}
         <Card style={styles.totalBalanceCard}>
           <Text style={styles.totalBalanceLabel}>Total Balance</Text>
