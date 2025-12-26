@@ -40,6 +40,16 @@ SOLANA_RPC_URL = {
 # COST Token Configuration (Update after deployment)
 COST_TOKEN_MINT = os.environ.get('COST_TOKEN_MINT', '')  # Will be set after token creation
 COST_TOKEN_DECIMALS = 9
+COST_WELCOME_BONUS = 10.0  # Welcome bonus for new users
+
+# Membership Tiers based on COST balance
+MEMBERSHIP_TIERS = {
+    'platinum': {'min_balance': 100000, 'discount': 50, 'color': '#E5E4E2', 'icon': 'trophy'},
+    'gold': {'min_balance': 50000, 'discount': 40, 'color': '#FFD700', 'icon': 'medal'},
+    'silver': {'min_balance': 30000, 'discount': 30, 'color': '#C0C0C0', 'icon': 'ribbon'},
+    'bronze': {'min_balance': 15000, 'discount': 20, 'color': '#CD7F32', 'icon': 'star'},
+    'basic': {'min_balance': 0, 'discount': 10, 'color': '#808080', 'icon': 'person'},
+}
 
 # USDT Token Addresses on Solana
 USDT_TOKEN_MINT = {
