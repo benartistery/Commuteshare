@@ -656,6 +656,7 @@ async def login(data: UserLogin):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     token = create_token(user["id"])
+    membership = get_membership_tier(user.get("cost_balance", 0.0))
     
     return TokenResponse(
         access_token=token,
@@ -675,11 +676,14 @@ async def login(data: UserLogin):
             cost_balance=user.get("cost_balance", 0.0),
             sol_balance=user.get("sol_balance", 0.0),
             usdt_balance=user.get("usdt_balance", 0.0),
+            membership_tier=membership,
         )
     )
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(user: dict = Depends(get_current_user)):
+    membership = get_membership_tier(user.get("cost_balance", 0.0))
+    
     return UserResponse(
         id=user["id"],
         email=user["email"],
@@ -696,6 +700,7 @@ async def get_me(user: dict = Depends(get_current_user)):
         cost_balance=user.get("cost_balance", 0.0),
         sol_balance=user.get("sol_balance", 0.0),
         usdt_balance=user.get("usdt_balance", 0.0),
+        membership_tier=membership,
     )
 
 @api_router.put("/auth/country")
