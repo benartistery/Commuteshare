@@ -43,11 +43,29 @@ interface WalletBalance {
   currency: { code: string; symbol: string; name: string };
   solana_wallet?: string;
   exchange_rates: Record<string, number>;
+  membership: MembershipTier;
+}
+
+interface MembershipTier {
+  tier: string;
+  tier_name: string;
+  discount: number;
+  color: string;
+  icon: string;
+  min_balance: number;
+  cost_balance: number;
+  next_tier?: {
+    tier: string;
+    tier_name: string;
+    discount: number;
+    color: string;
+    min_balance: number;
+    tokens_needed: number;
+  };
 }
 
 interface DiscountInfo {
-  days_since_joining: number;
-  is_first_year: boolean;
+  membership: MembershipTier;
   discounts: {
     fiat: number;
     sol: number;
