@@ -845,6 +845,56 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flex: 1,
   },
+  membershipCard: {
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.md,
+    padding: SPACING.md,
+    borderWidth: 2,
+    borderRadius: BORDER_RADIUS.lg,
+  },
+  membershipHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  tierBadge: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  membershipInfo: {
+    flex: 1,
+  },
+  tierName: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  tierDiscount: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+  },
+  nextTierProgress: {
+    marginTop: SPACING.md,
+  },
+  progressBar: {
+    height: 8,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: SPACING.xs,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  nextTierText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+  },
   totalBalanceCard: {
     marginHorizontal: SPACING.lg,
     marginBottom: SPACING.md,
