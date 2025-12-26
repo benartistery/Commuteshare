@@ -918,30 +918,26 @@ async def get_rates():
 
 @api_router.get("/wallet/discount-info")
 async def get_discount_info(user: dict = Depends(get_current_user)):
-    """Get discount information for the user"""
-    join_date = user.get('created_at', datetime.utcnow())
-    days_since_joining = (datetime.utcnow() - join_date).days
-    is_first_year = days_since_joining <= 365
-    
-    # Calculate current COST discount
-    if is_first_year:
-        discount_range = 50 - 15
-        days_factor = days_since_joining / 365
-        cost_discount = 50 - (discount_range * days_factor)
-        cost_discount = max(15, min(50, cost_discount))
-    else:
-        cost_discount = 15
+    """Get discount information based on membership tier"""
+    cost_balance = user.get('cost_balance', 0.0)
+    membership = get_membership_tier(cost_balance)
     
     return {
-        "days_since_joining": days_since_joining,
-        "is_first_year": is_first_year,
+        "membership": membership,
         "discounts": {
             "fiat": 5,
             "sol": 5,
             "usdt": 5,
-            "cost": round(cost_discount, 1)
+            "cost": membership['discount']
         },
-        "message": f"Use COST tokens for up to {round(cost_discount, 1)}% discount!" if is_first_year else "Use COST tokens for 15% discount!"
+        "message": f"{membership['tier_name']} Member - {membership['discount']}% discount with COST!",
+        "tier_benefits": {
+            "basic": {"min": 0, "max": 14999, "discount": 10},
+            "bronze": {"min": 15000, "max": 29999, "discount": 20},
+            "silver": {"min": 30000, "max": 49999, "discount": 30},
+            "gold": {"min": 50000, "max": 99999, "discount": 40},
+            "platinum": {"min": 100000, "max": None, "discount": 50},
+        }
     }
 
 # ==================== SOLANA WALLET ROUTES ====================
