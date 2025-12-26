@@ -602,9 +602,9 @@ async def register(data: UserRegister):
         "is_verified": False,
         "wallet_balance": 0.0,
         "loyalty_points": 0,
-        # Crypto balances
+        # Crypto balances - new users get welcome bonus
         "solana_wallet": None,
-        "cost_balance": 0.0,
+        "cost_balance": COST_WELCOME_BONUS,  # 10 COST welcome bonus
         "sol_balance": 0.0,
         "usdt_balance": 0.0,
         "created_at": datetime.utcnow(),
@@ -613,7 +613,19 @@ async def register(data: UserRegister):
     
     await db.users.insert_one(user)
     
+    # Record welcome bonus transaction
+    welcome_transaction = WalletTransaction(
+        user_id=user_id,
+        amount=COST_WELCOME_BONUS,
+        currency="COST",
+        transaction_type="deposit",
+        description="Welcome Bonus - 10 COST tokens!",
+        reference=f"WELCOME-{uuid.uuid4().hex[:8].upper()}"
+    )
+    await db.transactions.insert_one(welcome_transaction.dict())
+    
     token = create_token(user_id)
+    membership = get_membership_tier(user["cost_balance"])
     
     return TokenResponse(
         access_token=token,
@@ -633,6 +645,7 @@ async def register(data: UserRegister):
             cost_balance=user.get("cost_balance", 0.0),
             sol_balance=user.get("sol_balance", 0.0),
             usdt_balance=user.get("usdt_balance", 0.0),
+            membership_tier=membership,
         )
     )
 
