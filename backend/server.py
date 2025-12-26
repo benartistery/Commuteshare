@@ -993,12 +993,21 @@ async def get_token_info():
         "network": SOLANA_NETWORK,
         "mint_address": COST_TOKEN_MINT or "Not deployed yet",
         "price_usd": rates['COST_USD'],
+        "welcome_bonus": COST_WELCOME_BONUS,
         "benefits": [
-            "15-50% discount on all transactions (first year)",
-            "15% discount after first year",
-            "Loyalty rewards",
+            "10-50% discount based on membership tier",
+            "10 COST welcome bonus for new users",
+            "Instant tier upgrades when you deposit more",
+            "Loyalty rewards on all purchases",
             "Governance voting (coming soon)",
             "Staking rewards (coming soon)"
+        ],
+        "membership_tiers": [
+            {"tier": "basic", "name": "Basic", "min_balance": 0, "max_balance": 14999, "discount": 10, "color": "#808080"},
+            {"tier": "bronze", "name": "Bronze", "min_balance": 15000, "max_balance": 29999, "discount": 20, "color": "#CD7F32"},
+            {"tier": "silver", "name": "Silver", "min_balance": 30000, "max_balance": 49999, "discount": 30, "color": "#C0C0C0"},
+            {"tier": "gold", "name": "Gold", "min_balance": 50000, "max_balance": 99999, "discount": 40, "color": "#FFD700"},
+            {"tier": "platinum", "name": "Platinum", "min_balance": 100000, "max_balance": None, "discount": 50, "color": "#E5E4E2"},
         ],
         "total_supply": "1,000,000,000 COST",
         "circulating_supply": "100,000,000 COST (testnet)"
