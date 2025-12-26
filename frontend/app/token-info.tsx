@@ -15,6 +15,15 @@ import { Card } from '../src/components/common/Card';
 import { Button } from '../src/components/common/Button';
 import api from '../src/api/client';
 
+interface MembershipTierInfo {
+  tier: string;
+  name: string;
+  min_balance: number;
+  max_balance: number | null;
+  discount: number;
+  color: string;
+}
+
 interface TokenInfo {
   name: string;
   symbol: string;
@@ -22,7 +31,9 @@ interface TokenInfo {
   network: string;
   mint_address: string;
   price_usd: number;
+  welcome_bonus: number;
   benefits: string[];
+  membership_tiers: MembershipTierInfo[];
   total_supply: string;
   circulating_supply: string;
 }
@@ -53,6 +64,23 @@ export default function TokenInfoScreen() {
     }
   };
 
+  const getTierIcon = (tier: string): any => {
+    switch (tier) {
+      case 'platinum': return 'trophy';
+      case 'gold': return 'medal';
+      case 'silver': return 'ribbon';
+      case 'bronze': return 'star';
+      default: return 'person';
+    }
+  };
+
+  const formatBalance = (min: number, max: number | null) => {
+    if (max === null) {
+      return `${min.toLocaleString()}+`;
+    }
+    return `${min.toLocaleString()} - ${max.toLocaleString()}`;
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -77,13 +105,67 @@ export default function TokenInfoScreen() {
           </View>
         </View>
 
+        {/* Welcome Bonus */}
+        <Card style={[styles.section, styles.welcomeCard]}>
+          <View style={styles.welcomeHeader}>
+            <Ionicons name="gift" size={28} color={COLORS.accent} />
+            <View style={styles.welcomeInfo}>
+              <Text style={styles.welcomeTitle}>Welcome Bonus!</Text>
+              <Text style={styles.welcomeSubtitle}>New users get {tokenInfo?.welcome_bonus || 10} COST free</Text>
+            </View>
+          </View>
+        </Card>
+
+        {/* Membership Tiers */}
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>Membership Tiers</Text>
+          <Text style={styles.tierSubtitle}>
+            Your tier is based on your COST balance. Tiers update instantly!
+          </Text>
+          
+          {(tokenInfo?.membership_tiers || [
+            { tier: 'basic', name: 'Basic', min_balance: 0, max_balance: 14999, discount: 10, color: '#808080' },
+            { tier: 'bronze', name: 'Bronze', min_balance: 15000, max_balance: 29999, discount: 20, color: '#CD7F32' },
+            { tier: 'silver', name: 'Silver', min_balance: 30000, max_balance: 49999, discount: 30, color: '#C0C0C0' },
+            { tier: 'gold', name: 'Gold', min_balance: 50000, max_balance: 99999, discount: 40, color: '#FFD700' },
+            { tier: 'platinum', name: 'Platinum', min_balance: 100000, max_balance: null, discount: 50, color: '#E5E4E2' },
+          ]).map((tier, index) => (
+            <View 
+              key={tier.tier} 
+              style={[
+                styles.tierRow, 
+                { borderLeftColor: tier.color, borderLeftWidth: 4 },
+                index === 0 && styles.firstTierRow
+              ]}
+            >
+              <View style={[styles.tierIconContainer, { backgroundColor: tier.color }]}>
+                <Ionicons 
+                  name={getTierIcon(tier.tier)} 
+                  size={20} 
+                  color={tier.tier === 'basic' ? COLORS.white : '#333'} 
+                />
+              </View>
+              <View style={styles.tierInfo}>
+                <Text style={styles.tierName}>{tier.name}</Text>
+                <Text style={styles.tierBalance}>{formatBalance(tier.min_balance, tier.max_balance)} COST</Text>
+              </View>
+              <View style={[styles.tierDiscountBadge, { backgroundColor: tier.color + '30' }]}>
+                <Text style={[styles.tierDiscountText, { color: tier.tier === 'basic' ? COLORS.textSecondary : '#333' }]}>
+                  {tier.discount}% off
+                </Text>
+              </View>
+            </View>
+          ))}
+        </Card>
+
         {/* Benefits Section */}
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Token Benefits</Text>
           {(tokenInfo?.benefits || [
-            '15-50% discount on all transactions (first year)',
-            '15% discount after first year',
-            'Loyalty rewards',
+            '10-50% discount based on membership tier',
+            '10 COST welcome bonus for new users',
+            'Instant tier upgrades when you deposit more',
+            'Loyalty rewards on all purchases',
             'Governance voting (coming soon)',
             'Staking rewards (coming soon)',
           ]).map((benefit, index) => (
@@ -131,40 +213,6 @@ export default function TokenInfoScreen() {
           </Text>
         </Card>
 
-        {/* Discount Tiers */}
-        <Card style={styles.section}>
-          <Text style={styles.sectionTitle}>Discount Structure</Text>
-          <View style={styles.discountTable}>
-            <View style={styles.discountHeader}>
-              <Text style={styles.discountHeaderText}>Payment Method</Text>
-              <Text style={styles.discountHeaderText}>Discount</Text>
-            </View>
-            <View style={styles.discountRow}>
-              <Text style={styles.discountMethod}>Fiat Currency</Text>
-              <Text style={styles.discountValue}>5%</Text>
-            </View>
-            <View style={styles.discountRow}>
-              <Text style={styles.discountMethod}>SOL</Text>
-              <Text style={styles.discountValue}>5%</Text>
-            </View>
-            <View style={styles.discountRow}>
-              <Text style={styles.discountMethod}>USDT</Text>
-              <Text style={styles.discountValue}>5%</Text>
-            </View>
-            <View style={[styles.discountRow, styles.highlightRow]}>
-              <Text style={[styles.discountMethod, { color: COLORS.accent }]}>COST (First Year)</Text>
-              <Text style={[styles.discountValue, { color: COLORS.accent }]}>15-50%</Text>
-            </View>
-            <View style={styles.discountRow}>
-              <Text style={styles.discountMethod}>COST (After 1 Year)</Text>
-              <Text style={styles.discountValue}>15%</Text>
-            </View>
-          </View>
-          <Text style={styles.discountNote}>
-            * COST discount starts at 50% and gradually decreases to 15% over your first year
-          </Text>
-        </Card>
-
         {/* How to Get COST */}
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>How to Get COST</Text>
@@ -201,8 +249,8 @@ export default function TokenInfoScreen() {
                 <Text style={styles.stepNumberText}>4</Text>
               </View>
               <View style={styles.stepContent}>
-                <Text style={styles.stepTitle}>Enjoy Discounts!</Text>
-                <Text style={styles.stepDesc}>Pay with COST and save up to 50%</Text>
+                <Text style={styles.stepTitle}>Upgrade Your Tier!</Text>
+                <Text style={styles.stepDesc}>More COST = Higher tier = Bigger discounts!</Text>
               </View>
             </View>
           </View>
@@ -211,7 +259,7 @@ export default function TokenInfoScreen() {
         {/* Action Buttons */}
         <View style={styles.actionButtons}>
           <Button
-            title="Swap to COST"
+            title="Get COST Now"
             onPress={() => router.push('/(tabs)/wallet')}
             size="large"
             style={{ backgroundColor: COLORS.accent }}
@@ -289,11 +337,79 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
     padding: SPACING.lg,
   },
+  welcomeCard: {
+    backgroundColor: COLORS.accent + '15',
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+  },
+  welcomeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  welcomeInfo: {
+    flex: 1,
+  },
+  welcomeTitle: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: 'bold',
+    color: COLORS.accent,
+  },
+  welcomeSubtitle: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textSecondary,
+  },
   sectionTitle: {
     fontSize: FONT_SIZE.lg,
     fontWeight: '600',
     color: COLORS.text,
     marginBottom: SPACING.md,
+  },
+  tierSubtitle: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textMuted,
+    marginBottom: SPACING.md,
+  },
+  tierRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.sm,
+    marginBottom: SPACING.sm,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: BORDER_RADIUS.md,
+    gap: SPACING.md,
+  },
+  firstTierRow: {
+    marginTop: SPACING.sm,
+  },
+  tierIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tierInfo: {
+    flex: 1,
+  },
+  tierName: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  tierBalance: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textMuted,
+  },
+  tierDiscountBadge: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    borderRadius: BORDER_RADIUS.md,
+  },
+  tierDiscountText: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: 'bold',
   },
   benefitRow: {
     flexDirection: 'row',
@@ -345,48 +461,6 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xs,
     color: COLORS.textMuted,
     marginTop: SPACING.sm,
-  },
-  discountTable: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: BORDER_RADIUS.md,
-    overflow: 'hidden',
-  },
-  discountHeader: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.surfaceLight,
-    padding: SPACING.md,
-  },
-  discountHeaderText: {
-    flex: 1,
-    fontSize: FONT_SIZE.sm,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  discountRow: {
-    flexDirection: 'row',
-    padding: SPACING.md,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-  highlightRow: {
-    backgroundColor: COLORS.accent + '10',
-  },
-  discountMethod: {
-    flex: 1,
-    fontSize: FONT_SIZE.md,
-    color: COLORS.textSecondary,
-  },
-  discountValue: {
-    fontSize: FONT_SIZE.md,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  discountNote: {
-    fontSize: FONT_SIZE.xs,
-    color: COLORS.textMuted,
-    marginTop: SPACING.sm,
-    fontStyle: 'italic',
   },
   stepsList: {
     gap: SPACING.md,
